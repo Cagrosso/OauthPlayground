@@ -3,19 +3,33 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"net/http"
 	"os"
+	"time"
+
+	"github.com/google/uuid"
 )
 
 var (
-	port         string
-	clientID     string
-	clientSecret string
-	httpClient   http.Client
+	port                string
+	clientID            string
+	clientSecret        string
+	httpClient          http.Client
+	sessionTrackerCache map[string]sessionTracker
+)
+
+const (
+	sessionTokenConst = "session_token"
 )
 
 type oAuthAccessResponse struct {
 	AccessToken string `json:"access_token"`
+}
+
+type sessionTracker struct {
+	AccessToken string
+	TimeOut     time.Time
 }
 
 func main() {
@@ -25,9 +39,10 @@ func main() {
 	}
 
 	httpClient = http.Client{}
+	sessionTrackerCache = make(map[string]sessionTracker)
 
-	fs := http.FileServer(http.Dir("./public"))
-	http.Handle("/", fs)
+	http.HandleFunc("/", indexHandler)
+	http.HandleFunc("/welcome.html", welcomeHandler)
 	http.HandleFunc("/headers", headersHandler)
 	http.HandleFunc("/oauth/redirect", oauthRedirectHandler)
 
@@ -35,7 +50,40 @@ func main() {
 	http.ListenAndServe(port, nil)
 }
 
+func indexHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("/")
+	dat, err := ioutil.ReadFile("./public/index.html")
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "could not read index page: %+v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	fmt.Fprintf(w, string(dat))
+}
+
+func welcomeHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("/welcome")
+
+	cookie, err := req.Cookie(sessionTokenConst)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "no cookie attached: %+v", err)
+		//w.WriteHeader(http.StatusBadRequest)
+	} else {
+		sessionToken := cookie.Value
+		fmt.Println("Cookie " + sessionToken)
+	}
+
+	dat, err := ioutil.ReadFile("./public/welcome.html")
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "could not read welcome page: %+v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	fmt.Fprintf(w, string(dat))
+}
+
 func headersHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("/headers")
 	for name, headers := range req.Header {
 		for _, h := range headers {
 			fmt.Fprintf(w, "%v: %v\n", name, h)
@@ -44,7 +92,7 @@ func headersHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func oauthRedirectHandler(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("Redirected...")
+	fmt.Println("/oauth/redirect")
 
 	err := r.ParseForm()
 	if err != nil {
@@ -76,8 +124,27 @@ func oauthRedirectHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}
 
-	w.Header().Set("Location", "/welcome.html?access_token="+t.AccessToken)
-	w.WriteHeader(http.StatusFound)
+	attachSessionCookieToResponseWriter(w, t.AccessToken)
+
+	http.Redirect(w, r, "/welcome.html", http.StatusFound)
+}
+
+func attachSessionCookieToResponseWriter(w http.ResponseWriter, accessToken string) {
+	newSession := sessionTracker{
+		AccessToken: accessToken,
+		TimeOut:     time.Now().Add(time.Minute * 15),
+	}
+
+	sessionToken := uuid.New().String()
+
+	sessionTrackerCache[sessionToken] = newSession
+
+	http.SetCookie(w, &http.Cookie{
+		Name:    sessionTokenConst,
+		Value:   sessionToken,
+		Expires: newSession.TimeOut,
+		Domain:  "localhost",
+	})
 }
 
 func getConfiguration() error {
