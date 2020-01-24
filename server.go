@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"time"
 
@@ -45,6 +46,7 @@ func main() {
 	http.HandleFunc("/welcome.html", welcomeHandler)
 	http.HandleFunc("/headers", headersHandler)
 	http.HandleFunc("/oauth/redirect", oauthRedirectHandler)
+	http.HandleFunc("/api/user", userInfoHandler)
 
 	fmt.Printf("Listening on %v ...\n", port)
 	http.ListenAndServe(port, nil)
@@ -63,15 +65,6 @@ func indexHandler(w http.ResponseWriter, req *http.Request) {
 
 func welcomeHandler(w http.ResponseWriter, req *http.Request) {
 	fmt.Println("/welcome")
-
-	cookie, err := req.Cookie(sessionTokenConst)
-	if err != nil {
-		fmt.Fprintf(os.Stdout, "no cookie attached: %+v", err)
-		//w.WriteHeader(http.StatusBadRequest)
-	} else {
-		sessionToken := cookie.Value
-		fmt.Println("Cookie " + sessionToken)
-	}
 
 	dat, err := ioutil.ReadFile("./public/welcome.html")
 	if err != nil {
@@ -129,6 +122,44 @@ func oauthRedirectHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/welcome.html", http.StatusFound)
 }
 
+func userInfoHandler(w http.ResponseWriter, req *http.Request) {
+	fmt.Println("/api/user")
+
+	sessionToken, err := req.Cookie(sessionTokenConst)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "no cookie attached to request: %+v", err)
+		w.WriteHeader(http.StatusBadRequest)
+	}
+
+	authorizationToken := sessionTrackerCache[sessionToken.Value].AccessToken
+
+	url, _ := url.Parse("https://api.github.com/user")
+	headers := http.Header{}
+	headers.Add("Authorization", fmt.Sprintf("token %s", authorizationToken))
+
+	userRequest := http.Request{
+		Method: "GET",
+		Header: headers,
+		URL:    url,
+	}
+
+	resp, err := httpClient.Do(&userRequest)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "failed to make Github user api request: %+v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Fprintf(os.Stdout, "could not read body: %+v", err)
+		w.WriteHeader(http.StatusInternalServerError)
+	}
+
+	fmt.Printf("Body: %+v\n", string(body))
+	w.Write(body)
+	w.WriteHeader(http.StatusOK)
+}
+
 func attachSessionCookieToResponseWriter(w http.ResponseWriter, accessToken string) {
 	newSession := sessionTracker{
 		AccessToken: accessToken,
@@ -143,7 +174,7 @@ func attachSessionCookieToResponseWriter(w http.ResponseWriter, accessToken stri
 		Name:    sessionTokenConst,
 		Value:   sessionToken,
 		Expires: newSession.TimeOut,
-		Domain:  "localhost",
+		Path:    "/",
 	})
 }
 
