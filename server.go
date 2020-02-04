@@ -9,13 +9,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/cagrosso/OauthPlayground/helpers"
 	"github.com/google/uuid"
 )
 
 var (
-	port                string
-	clientID            string
-	clientSecret        string
+	serverConfig        helpers.ServerConfiguration
 	httpClient          http.Client
 	sessionTrackerCache map[string]sessionTracker
 )
@@ -28,13 +27,9 @@ type oAuthAccessResponse struct {
 	AccessToken string `json:"access_token"`
 }
 
-type sessionTracker struct {
-	AccessToken string
-	TimeOut     time.Time
-}
-
 func main() {
-	err := getConfiguration()
+	var err error
+	serverConfig, err = helpers.GetConfiguration()
 	if err != nil {
 		panic(err)
 	}
@@ -42,46 +37,11 @@ func main() {
 	httpClient = http.Client{}
 	sessionTrackerCache = make(map[string]sessionTracker)
 
-	http.HandleFunc("/", indexHandler)
-	http.HandleFunc("/welcome.html", welcomeHandler)
-	http.HandleFunc("/headers", headersHandler)
 	http.HandleFunc("/oauth/redirect", oauthRedirectHandler)
 	http.HandleFunc("/api/user", userInfoHandler)
 
-	fmt.Printf("Listening on %v ...\n", port)
-	http.ListenAndServe(port, nil)
-}
-
-func indexHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("/")
-	dat, err := ioutil.ReadFile("./public/index.html")
-	if err != nil {
-		fmt.Fprintf(os.Stdout, "could not read index page: %+v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-	}
-
-	fmt.Fprintf(w, string(dat))
-}
-
-func welcomeHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("/welcome")
-
-	dat, err := ioutil.ReadFile("./public/welcome.html")
-	if err != nil {
-		fmt.Fprintf(os.Stdout, "could not read welcome page: %+v", err)
-		w.WriteHeader(http.StatusInternalServerError)
-	}
-
-	fmt.Fprintf(w, string(dat))
-}
-
-func headersHandler(w http.ResponseWriter, req *http.Request) {
-	fmt.Println("/headers")
-	for name, headers := range req.Header {
-		for _, h := range headers {
-			fmt.Fprintf(w, "%v: %v\n", name, h)
-		}
-	}
+	fmt.Printf("Listening on %v ...\n", serverConfig.Port)
+	http.ListenAndServe(serverConfig.Port, nil)
 }
 
 func oauthRedirectHandler(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +55,11 @@ func oauthRedirectHandler(w http.ResponseWriter, r *http.Request) {
 
 	code := r.FormValue("code")
 
-	reqURL := fmt.Sprintf("https://github.com/login/oauth/access_token?client_id=%s&client_secret=%s&code=%s", clientID, clientSecret, code)
+	reqURL := fmt.Sprintf("https://github.com/login/oauth/access_token?client_id=%s&client_secret=%s&code=%s",
+		serverConfig.ClientID,
+		serverConfig.ClientSecret,
+		code,
+	)
 	req, err := http.NewRequest(http.MethodPost, reqURL, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stdout, "could not create HTTP request: %v", err)
@@ -176,38 +140,4 @@ func attachSessionCookieToResponseWriter(w http.ResponseWriter, accessToken stri
 		Expires: newSession.TimeOut,
 		Path:    "/",
 	})
-}
-
-func getConfiguration() error {
-	var err error
-	port, err = getEnv("PORT")
-	if err != nil {
-		return err
-	}
-	port = getPort(port)
-
-	clientID, err = getEnv("CLIENT_ID")
-	if err != nil {
-		return err
-	}
-
-	clientSecret, err = getEnv("CLIENT_SECRET")
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func getEnv(name string) (string, error) {
-	envValue := os.Getenv(name)
-	if envValue == "" {
-		return "", fmt.Errorf("Env '%v' not set", name)
-	}
-
-	return envValue, nil
-}
-
-func getPort(portNumber string) string {
-	return fmt.Sprintf(":%v", portNumber)
 }
